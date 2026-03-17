@@ -75,13 +75,13 @@ def _fake_mcp_module(
     monkeypatch.setitem(sys.modules, "mcp.client.streamable_http", streamable_http_mod)
 
 
-def _make_wrapper(session: object, *, timeout: float = 0.1) -> MCPToolWrapper:
+def _make_wrapper(runtime: object, *, timeout: float = 0.1) -> MCPToolWrapper:
     tool_def = SimpleNamespace(
         name="demo",
         description="demo tool",
         inputSchema={"type": "object", "properties": {}},
     )
-    return MCPToolWrapper(session, "test", tool_def, tool_timeout=timeout)
+    return MCPToolWrapper(runtime, "test", tool_def, tool_timeout=timeout)
 
 
 @pytest.mark.asyncio
@@ -90,7 +90,7 @@ async def test_execute_returns_text_blocks() -> None:
         assert arguments == {"value": 1}
         return SimpleNamespace(content=[_FakeTextContent("hello"), 42])
 
-    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool, reconnect=lambda: None))
 
     result = await wrapper.execute(value=1)
 
@@ -103,7 +103,7 @@ async def test_execute_returns_timeout_message() -> None:
         await asyncio.sleep(1)
         return SimpleNamespace(content=[])
 
-    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool), timeout=0.01)
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool, reconnect=lambda: None), timeout=0.01)
 
     result = await wrapper.execute()
 
@@ -115,7 +115,7 @@ async def test_execute_handles_server_cancelled_error() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
         raise asyncio.CancelledError()
 
-    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool, reconnect=lambda: None))
 
     result = await wrapper.execute()
 
@@ -131,7 +131,7 @@ async def test_execute_re_raises_external_cancellation() -> None:
         await asyncio.sleep(60)
         return SimpleNamespace(content=[])
 
-    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool), timeout=10)
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool, reconnect=lambda: None), timeout=10)
     task = asyncio.create_task(wrapper.execute())
     await started.wait()
 
@@ -146,7 +146,47 @@ async def test_execute_handles_generic_exception() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
         raise RuntimeError("boom")
 
-    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool, reconnect=lambda: None))
+
+    result = await wrapper.execute()
+
+    assert result == "(MCP tool call failed: RuntimeError)"
+
+
+@pytest.mark.asyncio
+async def test_execute_reconnects_and_retries_on_disconnect() -> None:
+    calls: list[str] = []
+    state = {"connected": False}
+
+    async def call_tool(_name: str, arguments: dict) -> object:
+        calls.append("call")
+        if not state["connected"]:
+            raise RuntimeError("connection closed")
+        assert arguments == {"value": 7}
+        return SimpleNamespace(content=[_FakeTextContent("recovered")])
+
+    async def reconnect() -> bool:
+        calls.append("reconnect")
+        state["connected"] = True
+        return True
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool, reconnect=reconnect))
+
+    result = await wrapper.execute(value=7)
+
+    assert result == "recovered"
+    assert calls == ["call", "reconnect", "call"]
+
+
+@pytest.mark.asyncio
+async def test_execute_returns_failure_when_reconnect_fails() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        raise RuntimeError("session closed")
+
+    async def reconnect() -> bool:
+        return False
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool, reconnect=reconnect))
 
     result = await wrapper.execute()
 
