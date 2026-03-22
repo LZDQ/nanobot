@@ -172,16 +172,38 @@ async def test_send_group_media_uses_image_segment(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_notice_and_request_handlers_log_without_bus_messages() -> None:
+async def test_group_increase_notice_publishes_inbound_event() -> None:
     channel = NapCatChannel(
-        NapCatConfig(allow_from=["*"], handle_notice_events=True, handle_request_events=True),
+        NapCatConfig(allow_from=["*"], handle_notice_events=True),
         MessageBus(),
     )
+    calls: list[tuple[str, dict]] = []
+
+    async def fake_call_api(action, params=None):
+        calls.append((action, params or {}))
+        if action == "get_group_member_info":
+            return {"nickname": "alice"}
+        return {"message_id": 1}
+
+    channel._call_api = fake_call_api  # type: ignore[method-assign]
 
     await channel._handle_ws_message('{"post_type":"notice","notice_type":"group_increase","group_id":1,"user_id":2}')
-    await channel._handle_ws_message('{"post_type":"request","request_type":"friend","user_id":2,"comment":"hi"}')
 
-    assert channel.bus.inbound_size == 0
+    msg = await channel.bus.consume_inbound()
+    assert calls == [
+        (
+            "get_group_member_info",
+            {"group_id": 1, "user_id": 2, "no_cache": True},
+        )
+    ]
+    assert msg.channel == "napcat"
+    assert msg.sender_id == "system"
+    assert msg.chat_id == "1"
+    assert msg.content == "System notice: alice joined the group."
+    assert msg.metadata["is_group"] is True
+    assert msg.metadata["notice_type"] == "group_increase"
+    assert msg.metadata["joined_user_id"] == "2"
+    assert msg.metadata["joined_user_name"] == "alice"
 
 
 @pytest.mark.asyncio

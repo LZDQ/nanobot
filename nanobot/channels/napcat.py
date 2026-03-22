@@ -14,7 +14,7 @@ import websockets
 from loguru import logger
 from pydantic import Field
 
-from nanobot.bus.events import OutboundMessage
+from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
 from nanobot.config.paths import get_media_dir
@@ -31,7 +31,6 @@ class NapCatConfig(Base):
     group_policy: Literal["open", "mention"] = "mention"
     reconnect_delay_s: float = 5.0
     handle_notice_events: bool = False
-    handle_request_events: bool = False
     message_debounce_enabled: bool = True
     message_debounce_seconds: float = 5.0
     message_debounce_max_messages: int = 5
@@ -127,6 +126,14 @@ class NapCatChannel(BaseChannel):
         if msg.content:
             await self._send_text(msg.chat_id, msg.content, is_group)
 
+    async def _send_text(self, chat_id: str, content: str, is_group: bool) -> None:
+        """Send one text message."""
+        action = "send_group_msg" if is_group else "send_private_msg"
+        target_key = "group_id" if is_group else "user_id"
+        result = await self._call_api(action, {target_key: int(chat_id), "message": content})
+        if result is None:
+            logger.warning("NapCat text send failed to {}", chat_id)
+
     async def _run_connection(self) -> None:
         """Open the websocket and process inbound events until disconnect."""
         headers = self._connect_headers()
@@ -158,31 +165,18 @@ class NapCatChannel(BaseChannel):
             return {}
         return {"Authorization": f"Bearer {self.config.access_token}"}
 
-    async def _send_text(self, chat_id: str, content: str, is_group: bool) -> None:
-        """Send one text message."""
-        action = "send_group_msg" if is_group else "send_private_msg"
-        target_key = "group_id" if is_group else "user_id"
-        result = await self._call_api(action, {target_key: int(chat_id), "message": content})
-        if result is None:
-            logger.warning("NapCat text send failed to {}", chat_id)
+    async def _build_media_segment(self, media_path: str) -> dict[str, Any] | None:
+        """Build a OneBot media segment from a local path or remote URL."""
+        if media_path.startswith(("http://", "https://")):
+            file_param = media_path
+        else:
+            file_param = await self._encode_media_file(media_path)
+            if file_param is None:
+                return None
 
-    async def _send_media(self, chat_id: str, media_path: str, is_group: bool) -> None:
-        """Send one media message using OneBot segment arrays."""
-        segment = await self._build_media_segment(media_path)
-        if segment is None:
-            return
-
-        action = "send_group_msg" if is_group else "send_private_msg"
-        target_key = "group_id" if is_group else "user_id"
-        result = await self._call_api(
-            action,
-            {
-                target_key: int(chat_id),
-                "message": [segment],
-            },
-        )
-        if result is None:
-            logger.warning("NapCat {} send failed to {}", segment["type"], chat_id)
+        suffix = Path(media_path).suffix.lower()
+        segment_type = "record" if suffix in {".mp3", ".wav", ".ogg", ".amr", ".silk", ".m4a"} else "image"
+        return {"type": segment_type, "data": {"file": file_param}}
 
     async def _send_message_with_media(self, chat_id: str, content: str, media_paths: list[str], is_group: bool) -> None:
         """Send one combined OneBot message containing optional text and media segments."""
@@ -207,19 +201,6 @@ class NapCatChannel(BaseChannel):
         )
         if result is None:
             logger.warning("NapCat media send failed to {}", chat_id)
-
-    async def _build_media_segment(self, media_path: str) -> dict[str, Any] | None:
-        """Build a OneBot media segment from a local path or remote URL."""
-        if media_path.startswith(("http://", "https://")):
-            file_param = media_path
-        else:
-            file_param = await self._encode_media_file(media_path)
-            if file_param is None:
-                return None
-
-        suffix = Path(media_path).suffix.lower()
-        segment_type = "record" if suffix in {".mp3", ".wav", ".ogg", ".amr", ".silk", ".m4a"} else "image"
-        return {"type": segment_type, "data": {"file": file_param}}
 
     async def _encode_media_file(self, media_path: str) -> str | None:
         """Encode a local file for websocket transport so NapCat does not need host path access."""
@@ -259,6 +240,7 @@ class NapCatChannel(BaseChannel):
             return
 
         if not isinstance(data, dict):
+            logger.warning("Websocket received non-dict message with type {}", type(data))
             return
 
         if data.get("self_id") is not None:
@@ -277,13 +259,12 @@ class NapCatChannel(BaseChannel):
                     future.set_result(None)
             return
 
+        # No echo, process inbound event
         post_type = data.get("post_type")
         if post_type == "message":
             await self._handle_event(data)
         elif post_type == "notice" and self.config.handle_notice_events:
             await self._handle_notice_event(data)
-        elif post_type == "request" and self.config.handle_request_events:
-            await self._handle_request_event(data)
 
     async def _handle_event(self, event: dict[str, Any]) -> None:
         """Handle an inbound OneBot message event."""
@@ -297,6 +278,7 @@ class NapCatChannel(BaseChannel):
 
         user_id = str(event.get("user_id") or "")
         if not user_id:
+            logger.warning("Received inbound message without user_id")
             return
 
         if self._self_id and user_id == self._self_id:
@@ -310,6 +292,7 @@ class NapCatChannel(BaseChannel):
             chat_id = user_id
             self._chat_type_cache[chat_id] = "private"
         else:
+            logger.debug("Ignored unknown message type: {}", message_type)
             return
 
         segments = event.get("message")
@@ -452,24 +435,52 @@ class NapCatChannel(BaseChannel):
         return str(file_path)
 
     async def _handle_notice_event(self, event: dict[str, Any]) -> None:
-        """Handle notice events via logs only."""
+        """Handle notice events by forwarding relevant ones into the agent loop."""
+        notice_type = str(event.get("notice_type") or "")
+        if notice_type == "group_increase":
+            group_id = str(event.get("group_id") or "")
+            user_id = str(event.get("user_id") or "")
+            if group_id and user_id and user_id != self._self_id:
+                nickname = await self._lookup_group_member_nickname(group_id, user_id)
+                self._chat_type_cache[group_id] = "group"
+                await self.bus.publish_inbound(
+                    InboundMessage(
+                        channel=self.name,
+                        sender_id="system",
+                        chat_id=group_id,
+                        content=f"System notice: {(nickname or user_id)} joined the group.",
+                        metadata={
+                            "is_group": True,
+                            "notice_type": notice_type,
+                            "joined_user_id": user_id,
+                            "joined_user_name": nickname,
+                        },
+                    )
+                )
+                return
         logger.info(
             "NapCat notice: type={} group_id={} user_id={}",
-            event.get("notice_type"),
+            notice_type,
             event.get("group_id"),
             event.get("user_id"),
         )
 
-    async def _handle_request_event(self, event: dict[str, Any]) -> None:
-        """Handle request events via logs only."""
-        logger.info(
-            "NapCat request: type={} sub_type={} user_id={} group_id={} comment={}",
-            event.get("request_type"),
-            event.get("sub_type"),
-            event.get("user_id"),
-            event.get("group_id"),
-            event.get("comment"),
+    async def _lookup_group_member_nickname(self, group_id: str, user_id: str) -> str | None:
+        """Resolve a group member nickname via NapCat's get_group_member_info API."""
+        result = await self._call_api(
+            "get_group_member_info",
+            {
+                "group_id": int(group_id),
+                "user_id": int(user_id),
+                "no_cache": True,
+            },
         )
+        if not isinstance(result, dict):
+            return None
+        nickname = result.get("nickname")
+        if isinstance(nickname, str) and nickname.strip():
+            return nickname.strip()
+        return None
 
     async def _debounce_message(
         self,
