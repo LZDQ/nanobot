@@ -189,7 +189,7 @@ async def test_group_increase_notice_publishes_inbound_event() -> None:
 
     await channel._handle_ws_message('{"post_type":"notice","notice_type":"group_increase","group_id":1,"user_id":2}')
 
-    msg = await channel.bus.consume_inbound()
+    msg = await asyncio.wait_for(channel.bus.consume_inbound(), timeout=1.0)
     assert calls == [
         (
             "get_group_member_info",
@@ -204,6 +204,25 @@ async def test_group_increase_notice_publishes_inbound_event() -> None:
     assert msg.metadata["notice_type"] == "group_increase"
     assert msg.metadata["joined_user_id"] == "2"
     assert msg.metadata["joined_user_name"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_notice_handling_does_not_block_frame_processing() -> None:
+    channel = NapCatChannel(
+        NapCatConfig(allow_from=["*"], handle_notice_events=True),
+        MessageBus(),
+    )
+
+    async def slow_lookup(group_id, user_id):
+        await asyncio.sleep(0.05)
+        return "alice"
+
+    channel._lookup_group_member_nickname = slow_lookup  # type: ignore[method-assign]
+
+    await asyncio.wait_for(
+        channel._handle_ws_message('{"post_type":"notice","notice_type":"group_increase","group_id":1,"user_id":2}'),
+        timeout=0.01,
+    )
 
 
 @pytest.mark.asyncio

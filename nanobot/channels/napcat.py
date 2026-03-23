@@ -441,22 +441,31 @@ class NapCatChannel(BaseChannel):
             group_id = str(event.get("group_id") or "")
             user_id = str(event.get("user_id") or "")
             if group_id and user_id and user_id != self._self_id:
-                nickname = await self._lookup_group_member_nickname(group_id, user_id)
-                self._chat_type_cache[group_id] = "group"
-                await self.bus.publish_inbound(
-                    InboundMessage(
-                        channel=self.name,
-                        sender_id="system",
-                        chat_id=group_id,
-                        content=f"System notice: {(nickname or user_id)} joined the group.",
-                        metadata={
-                            "is_group": True,
-                            "notice_type": notice_type,
-                            "joined_user_id": user_id,
-                            "joined_user_name": nickname,
-                        },
-                    )
-                )
+                # This lookup sends a websocket API request whose response is read by
+                # the receive loop. Detaching just this branch avoids waiting for that
+                # response from inside the same frame-processing call chain.
+                async def _publish_group_increase() -> None:
+                    try:
+                        nickname = await self._lookup_group_member_nickname(group_id, user_id)
+                        self._chat_type_cache[group_id] = "group"
+                        await self.bus.publish_inbound(
+                            InboundMessage(
+                                channel=self.name,
+                                sender_id="system",
+                                chat_id=group_id,
+                                content=f"System notice: {(nickname or user_id)} joined the group.",
+                                metadata={
+                                    "is_group": True,
+                                    "notice_type": notice_type,
+                                    "joined_user_id": user_id,
+                                    "joined_user_name": nickname,
+                                },
+                            )
+                        )
+                    except Exception as exc:
+                        logger.warning("NapCat notice handler failed: {}", exc)
+
+                asyncio.create_task(_publish_group_increase())
                 return
         logger.info(
             "NapCat notice: type={} group_id={} user_id={}",
