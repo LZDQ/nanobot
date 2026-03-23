@@ -467,6 +467,11 @@ class NapCatChannel(BaseChannel):
 
     async def _lookup_group_member_nickname(self, group_id: str, user_id: str) -> str | None:
         """Resolve a group member nickname via NapCat's get_group_member_info API."""
+        logger.debug(
+            "NapCat lookup group member nickname: group_id={} user_id={}",
+            group_id,
+            user_id,
+        )
         result = await self._call_api(
             "get_group_member_info",
             {
