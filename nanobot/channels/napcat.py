@@ -21,6 +21,12 @@ from nanobot.config.paths import get_media_dir
 from nanobot.config.schema import Base
 
 
+class NapCatGroupOverride(Base):
+    """Per-group NapCat behavior overrides."""
+
+    group_policy: Literal["open", "mention"] | None = None
+
+
 class NapCatConfig(Base):
     """NapCat OneBot WebSocket channel configuration."""
 
@@ -29,6 +35,7 @@ class NapCatConfig(Base):
     access_token: str = ""
     allow_from: list[str] = Field(default_factory=list)
     group_policy: Literal["open", "mention"] = "mention"
+    group_overrides: dict[str, NapCatGroupOverride] = Field(default_factory=dict)
     reconnect_delay_s: float = 5.0
     handle_notice_events: bool = False
     message_debounce_enabled: bool = True
@@ -298,7 +305,7 @@ class NapCatChannel(BaseChannel):
         segments = event.get("message")
         text, media = await self._parse_segments(segments, user_id)
 
-        if message_type == "group" and self.config.group_policy == "mention":
+        if message_type == "group" and self._group_policy_for(chat_id) == "mention":
             if not self._contains_self_mention(segments):
                 return
 
@@ -363,6 +370,13 @@ class NapCatChannel(BaseChannel):
             if qq == self._self_id:
                 return True
         return False
+
+    def _group_policy_for(self, group_id: str) -> Literal["open", "mention"]:
+        """Resolve the effective group policy for a specific group."""
+        override = self.config.group_overrides.get(group_id)
+        if override and override.group_policy is not None:
+            return override.group_policy
+        return self.config.group_policy
 
     async def _parse_segments(self, segments: Any, user_id: str) -> tuple[str, list[str]]:
         """Extract visible text, download images, and transcribe audio."""

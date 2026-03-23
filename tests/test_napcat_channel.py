@@ -138,6 +138,63 @@ async def test_group_mention_policy_accepts_at_bot() -> None:
 
 
 @pytest.mark.asyncio
+async def test_group_override_can_open_one_group() -> None:
+    channel = NapCatChannel(
+        NapCatConfig(
+            allow_from=["*"],
+            group_policy="mention",
+            group_overrides={"42": {"group_policy": "open"}},
+            message_debounce_enabled=False,
+        ),
+        MessageBus(),
+    )
+    channel._self_id = "999"
+
+    await channel._handle_event(
+        {
+            "post_type": "message",
+            "message_type": "group",
+            "message_id": 1,
+            "group_id": 42,
+            "user_id": 100,
+            "sender": {"nickname": "alice"},
+            "message": [{"type": "text", "data": {"text": "hello"}}],
+        }
+    )
+
+    msg = await channel.bus.consume_inbound()
+    assert msg.content == "alice: hello"
+
+
+@pytest.mark.asyncio
+async def test_group_override_does_not_affect_other_groups() -> None:
+    channel = NapCatChannel(
+        NapCatConfig(
+            allow_from=["*"],
+            group_policy="mention",
+            group_overrides={"42": {"group_policy": "open"}},
+            message_debounce_enabled=False,
+        ),
+        MessageBus(),
+    )
+    channel._self_id = "999"
+
+    await channel._handle_event(
+        {
+            "post_type": "message",
+            "message_type": "group",
+            "message_id": 1,
+            "group_id": 43,
+            "user_id": 100,
+            "sender": {"nickname": "alice"},
+            "message": [{"type": "text", "data": {"text": "hello"}}],
+        }
+    )
+
+    assert channel.bus.inbound_size == 0
+
+
+@pytest.mark.asyncio
 async def test_send_group_media_uses_image_segment(tmp_path: Path) -> None:
     media_path = tmp_path / "a.jpg"
     media_path.write_bytes(b"jpg")
