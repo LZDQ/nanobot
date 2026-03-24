@@ -602,10 +602,11 @@ Uses **[NapCatQQ](https://github.com/NapNeko/NapCatQQ) OneBot 11 forward WebSock
 
 **2. Configure**
 
-> - `ws_url`: NapCat forward WebSocket URL. Default is `ws://127.0.0.1:3001/`.
+> - `wsUrl`: NapCat forward WebSocket URL. Default is `ws://127.0.0.1:3001/`.
 > - `accessToken`: Set this to the forward websocket server's token.
-> - `allowFrom`: Add QQ user IDs. Use `["*"]` to allow all users.
+> - `allowFrom`: Add QQ user IDs (string). Use `["*"]` to allow all users.
 > - `groupPolicy`: `"mention"` (default — respond only when @mentioned in groups), `"open"` (respond to all allowed group messages). Private chats always respond.
+> - `groupOverrides`: Per-group policy overrides.
 > - `handleNoticeEvents`: Whether respond when new group member joins.
 > - `messageDebounceEnabled`: Whether combine multiple messages sent together.
 > - `messageDebounceSeconds`: Maximum seconds gap between two messages to be combined.
@@ -616,10 +617,15 @@ Uses **[NapCatQQ](https://github.com/NapNeko/NapCatQQ) OneBot 11 forward WebSock
   "channels": {
     "napcat": {
       "enabled": true,
-      "ws_url": "ws://127.0.0.1:3001/",
+      "wsUrl": "ws://127.0.0.1:3001/",
       "accessToken": "",
       "allowFrom": ["*"],
       "groupPolicy": "mention",
+      "groupOverrides": {
+        "12345678": {
+          "groupPolicy": "open"
+        }
+      },
       "reconnectDelayS": 5.0,
       "handleNoticeEvents": true,
       "messageDebounceEnabled": true,
