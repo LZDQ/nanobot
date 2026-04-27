@@ -73,18 +73,27 @@ def _patch_config(
     """Patch the generated config: enable channel, set workspace, optionally set model."""
     data = json.loads(config_path.read_text(encoding="utf-8"))
 
-    # Inherit providers (API keys, api_base, etc.) from current instance
+    # Inherit providers and model from current instance
     if inherit_config_path and inherit_config_path.exists():
         try:
             src = json.loads(inherit_config_path.read_text(encoding="utf-8"))
+
+            # Inherit providers (API keys, api_base, etc.)
             src_providers = src.get("providers", {})
             if src_providers:
                 data.setdefault("providers", {})
                 for key, val in src_providers.items():
                     if isinstance(val, dict) and val.get("apiKey"):
                         data["providers"][key] = val
+
+            # Inherit model if not explicitly overridden
+            if not model:
+                parent_model = src.get("agents", {}).get("defaults", {}).get("model")
+                if parent_model:
+                    model = parent_model
+
         except Exception as exc:
-            print(f"[WARN] Could not inherit providers from {inherit_config_path}: {exc}", file=sys.stderr)
+            print(f"[WARN] Could not inherit from {inherit_config_path}: {exc}", file=sys.stderr)
 
     # Set workspace and model
     data.setdefault("agents", {}).setdefault("defaults", {})

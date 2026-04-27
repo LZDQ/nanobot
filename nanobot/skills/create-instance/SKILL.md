@@ -1,50 +1,64 @@
 ---
 name: create-instance
-description: "Create a new nanobot instance with separate config and workspace. Use when the user wants to set up a new bot for a different channel, persona, or purpose."
+description: "Create a new nanobot instance with separate config and workspace. Use when the user wants to set up a new bot, create a new instance for a different channel, persona, or purpose. Triggers on: create instance, new bot, set up bot, add bot, create telegram/discord/feishu/slack/wechat/wecom/dingtalk/qq/email/matrix/msteams/whatsapp bot, multi-instance setup."
 ---
 
 # Create Instance
 
 Set up a new nanobot instance with its own config and workspace.
 
-## When to Use
-
-When the user wants to create a new bot instance — typically for a different channel (Telegram, Discord, WeChat, etc.) or with different settings.
-
 ## Steps
 
-1. **Collect information from the user** (ask one at a time if not already provided):
-   - **Instance name** (required): a short identifier like `telegram-bot`, `discord-bot`
-   - **Channel type** (required): e.g. `telegram`, `discord`, `weixin`, `feishu`, `slack`
-   - **Model** (optional): LLM model to use. Defaults to the same model as the current instance.
+1. **Collect information** (ask one at a time if not already provided):
+   - **Instance name** (required): short identifier, e.g. `telegram-bot`, `work-slack`
+   - **Channel type** (required): see table below
+   - **Model** (optional): LLM model, defaults to current instance
 
-2. **Do NOT collect sensitive information** in the chat (API keys, bot tokens, secrets). API keys are automatically copied from the current instance. Channel-specific tokens (e.g. `telegram.token`) still need to be filled in manually.
+2. **Do NOT collect secrets** in the chat (API keys, bot tokens). API keys are automatically inherited from the current instance via `--inherit-config`. Channel-specific tokens must be filled in manually after creation.
 
-3. **Run the creation script** using the exec tool — always pass `--inherit-config` with the current instance's config path so API keys are copied:
+3. **Run the creation script**:
 
 ```bash
-python D:/path/to/nanobot/skills/create-instance/scripts/create_instance.py --name <name> --channel <channel> --inherit-config ~/.nanobot/config.json [--model <model>] [--config-dir <path>]
+python <skill-dir>/scripts/create_instance.py --name <name> --channel <channel> --inherit-config <current-config>
 ```
 
-**Path rules (critical on Windows):**
-- Use **forward-slash absolute paths** to the script, e.g. `D:/path/to/create_instance.py`
-- Do **NOT** wrap paths in quotes — the exec tool will mangle them
-- Do **NOT** use `cd` — the exec tool ignores it; working directory stays as workspace
-- Do **NOT** use backslash paths like `D:\path` — they will fail
+- `<skill-dir>` — the directory containing this SKILL.md
+- `<current-config>` — current instance's config path, typically `~/.nanobot/config.json`
+- Optional: `--model <model>`, `--config-dir <path>`
 
-Use `~/.nanobot/config.json` as the `--inherit-config` path unless the current instance uses a custom config location.
+**Exec tool constraints:**
+- Use forward-slash paths (works on all platforms)
+- Do not wrap paths in quotes
+- Do not use `cd`; pass the full script path directly
 
-4. **Report results to the user**:
-   - Where the config and workspace were created
-   - Which fields they need to fill in (the script will list them)
-   - The command to start the instance: `nanobot gateway --config <config-path>`
+4. **Report results** to the user:
+   - Config and workspace paths (script outputs them)
+   - Required fields to fill in (script lists them)
+   - Start command: `nanobot gateway --config <config-path>`
 
-## Examples
+## Available Channels
 
-User: "help me create a Telegram bot" (or similar request)
+| Channel | Key | Required Fields |
+|---------|-----|-----------------|
+| Telegram | `telegram` | token |
+| Discord | `discord` | token |
+| Feishu / Lark | `feishu` | app_id, app_secret |
+| DingTalk | `dingtalk` | client_id, client_secret |
+| Slack | `slack` | bot_token, app_token |
+| WeCom | `wecom` | bot_id, secret |
+| WeChat OA | `weixin` | token |
+| WhatsApp | `whatsapp` | bridge_token |
+| QQ | `qq` | app_id, secret |
+| Email | `email` | imap_host, imap_username, imap_password, smtp_host, smtp_username, smtp_password, from_address |
+| Matrix | `matrix` | user_id, password or access_token |
+| MS Teams | `msteams` | app_id, app_password, tenant_id |
+| MoChat | `mochat` | claw_token |
+| WebSocket | `websocket` | token |
 
-→ Ask for an instance name if not obvious from context
-→ Ask which model to use (optional, can skip if user doesn't care)
-→ Run: `python D:/path/to/nanobot/skills/create-instance/scripts/create_instance.py --name telegram-bot --channel telegram --inherit-config ~/.nanobot/config.json`
-  (Replace `D:/path/to/nanobot` with the actual nanobot source directory)
-→ Tell user: config created at `~/.nanobot-telegram/config.json`, fill in `channels.telegram.token`, then start with `nanobot gateway --config ~/.nanobot-telegram/config.json`
+For detailed channel configuration including optional fields, see `references/channels.md`.
+
+## Troubleshooting
+
+- **"Unknown channel"**: Channel name must match the Key column exactly. Run the script without arguments to see usage.
+- **"Config already exists"**: Use a different `--name` or `--config-dir` to create in a new location.
+- **Port conflicts**: The script auto-assigns free ports for gateway and API if defaults are in use.
